@@ -1,265 +1,344 @@
+"""
+TruPharma GenAI Assistant  ·  Primary Demo
+============================================
+Streamlit app that connects to the openFDA RAG pipeline
+for drug-label evidence retrieval and grounded answers.
+"""
+
+import sys
+from pathlib import Path
+
+# ── Make src/ importable so we can reach rag_engine & openfda_rag ──
+_APP_DIR = Path(__file__).resolve().parent          # src/app/
+_SRC_DIR = _APP_DIR.parent                           # src/
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+
 import streamlit as st
 from datetime import datetime
 import time
 
-st.set_page_config(page_title="Primary Demo | Healthcare RAG", page_icon="🩺", layout="wide")
+from rag_engine import run_rag_query, read_logs
 
-# -------------------------------
-# Hide Streamlit built-in page nav
-# -------------------------------
+# ─── Page config ──────────────────────────────────────────────
+st.set_page_config(
+    page_title="Primary Demo | TruPharma RAG",
+    page_icon="🩺",
+    layout="wide",
+)
+
+# ─── Hide built-in page nav ──────────────────────────────────
 st.markdown("""
 <style>
 div[data-testid="stSidebarNav"] { display: none !important; }
 section[data-testid="stSidebar"] nav { display: none !important; }
 section[data-testid="stSidebar"] ul[role="list"] { display: none !important; }
-section[data-testid="stSidebar"] > div:first-child { padding-top: 0rem !important; }    
-section[data-testid="stSidebar"] button:has(svg) { display:none !important; }    
+section[data-testid="stSidebar"] > div:first-child { padding-top: 0rem !important; }
+/* Hide the auto-generated page nav links only, not collapse buttons */
+section[data-testid="stSidebar"] ul[data-testid="stSidebarNavItems"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# -------------------------------
-# App styling (cards, header, etc.)
-# -------------------------------
-st.markdown(""" <style> .main-header-bar { background: linear-gradient(90deg, #F2994A, #EB5757); color: white; padding: 12px 16px; border-radius: 10px; font-weight: 600; margin-bottom: 14px; } .scenario-card { padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; font-weight: 700; line-height: 1.2; } .primary-active { background-color: #E8F5E9; border-left: 6px solid #2E7D32; } .card { background: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); margin-bottom: 14px; } .card-title { font-weight: 800; font-size: 16px; margin-bottom: 8px; } .card-title.response { color: #1f7a8c; } .card-title.evidence { color: #d35400; } .card-title.metrics { color: #2e7d32; } .card-title.logs { color: #6b7280; } .bullets { margin: 0; padding-left: 18px; } .bullets li { margin: 6px 0; } /* Pill row */ .pillbtn > button { border-radius: 999px !important; padding: 0.6rem 1rem !important; font-weight: 700 !important; } .pill-row { display: flex; gap: 14px; margin: 10px 0 18px 0; } .pill-link { flex: 1; text-align: center; padding: 14px 14px; border-radius: 14px; border: 1px solid #d1d5db; background: #ffffff; font-weight: 800; color: #111827; text-decoration: none !important; box-shadow: 0 1px 2px rgba(0,0,0,0.06); } .pill-link:hover { background: #f3f4f6; } .pill-link.active { background: #5DADE2; border-color: #4b93c9; color: white !important; } .pill-link.active.response { background: #5DADE2; border-color: #4b93c9; } .pill-link.active.evidence { background: #F2994A; border-color: #E67E22; } .pill-link.active.metrics { background: #6FCF97; border-color: #27AE60; } .pill-link.active.logs { background: #BDBDBD; border-color: #9CA3AF; color: #111827 !important; } /* Global font override */ html, body, * { font-family: "Times New Roman", Times, serif !important; line-height: 1.4; } </style> """, unsafe_allow_html=True)
+# ─── App styling ──────────────────────────────────────────────
+st.markdown("""<style>
+.main-header-bar {
+    background: linear-gradient(90deg, #F2994A, #EB5757);
+    color: white; padding: 12px 16px; border-radius: 10px;
+    font-weight: 600; margin-bottom: 14px;
+}
+.scenario-card {
+    padding: 10px 12px; border-radius: 10px;
+    margin-bottom: 8px; font-weight: 700; line-height: 1.2;
+}
+.primary-active {
+    background-color: #E8F5E9; border-left: 6px solid #2E7D32;
+}
+.card {
+    background: #FFFFFF; border: 1px solid #E5E7EB;
+    border-radius: 14px; padding: 14px 16px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06); margin-bottom: 14px;
+}
+.card-title { font-weight: 800; font-size: 16px; margin-bottom: 8px; }
+.card-title.response { color: #1f7a8c; }
+.card-title.evidence { color: #d35400; }
+.card-title.metrics  { color: #2e7d32; }
+.card-title.logs     { color: #6b7280; }
+.bullets { margin: 0; padding-left: 18px; }
+.bullets li { margin: 6px 0; }
+.pill-link {
+    flex: 1; text-align: center; padding: 14px;
+    border-radius: 14px; border: 1px solid #d1d5db;
+    background: #ffffff; font-weight: 800; color: #111827;
+    text-decoration: none !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+/* Apply custom font but exclude Streamlit icon elements */
+html, body,
+p, h1, h2, h3, h4, h5, h6,
+span, div, li, td, th, label, a,
+input, textarea, select, button,
+.stMarkdown, .stText, .stCaption,
+[data-testid="stMetricValue"],
+[data-testid="stMetricLabel"] {
+    font-family: "Times New Roman", Times, serif !important;
+    line-height: 1.4;
+}
+/* Restore Streamlit's icon font for Material Icons */
+[data-testid="stIconMaterial"],
+.material-symbols-rounded,
+[data-testid="collapsedControl"] span,
+span[class*="icon"] {
+    font-family: "Material Symbols Rounded" !important;
+}
+</style>""", unsafe_allow_html=True)
 
 
-
-
-
-# -------------------------------
-# Session state init
-# -------------------------------
+# ══════════════════════════════════════════════════════════════
+#  SESSION STATE
+# ══════════════════════════════════════════════════════════════
 if "active_panel" not in st.session_state:
-    st.session_state.active_panel = "ALL"  # ALL = overall dashboard
-
-if "response" not in st.session_state:
-    st.session_state.response = None
-if "evidence" not in st.session_state:
-    st.session_state.evidence = []
-if "latency" not in st.session_state:
-    st.session_state.latency = 0
+    st.session_state.active_panel = "ALL"
+if "result" not in st.session_state:
+    st.session_state.result = None
 if "logs" not in st.session_state:
     st.session_state.logs = []
 
-def toggle_panel(name: str):
-    """Click pill to focus; click again to return to ALL."""
-    st.session_state.active_panel = "ALL" if st.session_state.active_panel == name else name
+def set_panel(name: str):
+    st.session_state.active_panel = (
+        "ALL" if st.session_state.active_panel == name else name
+    )
 
-# -------------------------------
-# Sidebar
-# -------------------------------
 
+# ══════════════════════════════════════════════════════════════
+#  SIDEBAR
+# ══════════════════════════════════════════════════════════════
 st.sidebar.title("Scenario Mode")
 st.sidebar.markdown(
-    "<div class='scenario-card primary-active'>🟢 Primary Demo<br><small>Normal user workflow</small></div>",
-    unsafe_allow_html=True
+    "<div class='scenario-card primary-active'>"
+    "🟢 Primary Demo<br><small>Normal user workflow</small></div>",
+    unsafe_allow_html=True,
 )
 if st.sidebar.button("⚠️ Go to Stress Test", key="go_stress"):
     st.switch_page("pages/stress_test.py")
 
+st.sidebar.markdown("---")
 
-st.sidebar.title("Use Case Input")
-query_text = st.sidebar.text_area("Query Text", placeholder="Enter clinical question...")
+# Example queries for convenience
+st.sidebar.subheader("Example Queries")
+EXAMPLES = [
+    "-- Select an example --",
+    "What are the drug interactions for ibuprofen?",
+    "What is the recommended dosage for acetaminophen and are there any warnings?",
+    "I am taking aspirin daily. What should I know about overdosage and when to stop use?",
+    "What safety warnings exist for caffeine-containing products?",
+    "What are the active ingredients in Tylenol and what are the drug interactions?",
+    "What is the projected cost of antimicrobial resistance to GDP in 2050?",
+]
+example = st.sidebar.selectbox("Pick a sample question:", EXAMPLES, index=0)
 
-run = st.sidebar.button("Run")
+st.sidebar.subheader("Query Input")
+default_q = "" if example == EXAMPLES[0] else example
+query_text = st.sidebar.text_area(
+    "Enter your drug-label question:",
+    value=default_q,
+    placeholder="e.g. What are the side effects of ibuprofen?",
+    height=100,
+)
 
+# ── Advanced settings (collapsible) ──
+with st.sidebar.expander("Advanced Settings"):
+    method = st.selectbox(
+        "Retrieval method",
+        ["hybrid", "dense", "sparse"],
+        index=0,
+    )
+    top_k = st.slider("Top-K evidence", 3, 10, 5)
+    use_rerank = st.checkbox("Use cross-encoder reranking", value=False)
+    gemini_key = st.text_input(
+        "Google Gemini API key (optional)",
+        type="password",
+        help="If provided, answers are generated by Gemini 2.0 Flash. "
+             "Otherwise, a rule-based extractive fallback is used.",
+    )
 
-st.sidebar.title("Reset Session")
-if st.sidebar.button("Reset"):
+run = st.sidebar.button("🔍 Run RAG Query", type="primary", use_container_width=True)
+
+st.sidebar.markdown("---")
+if st.sidebar.button("🔄 Reset Session"):
     st.session_state.clear()
     st.rerun()
 
-# -------------------------------
-# Run logic FIRST (so render uses updated state)
-# -------------------------------
+
+# ══════════════════════════════════════════════════════════════
+#  RUN LOGIC  (executes BEFORE rendering so state is updated)
+# ══════════════════════════════════════════════════════════════
 if run and query_text:
-    t0 = time.time()
-    time.sleep(0.5)
+    with st.spinner("Fetching FDA drug labels and running RAG pipeline..."):
+        result = run_rag_query(
+            query_text,
+            gemini_key=gemini_key,
+            method=method,
+            top_k=top_k,
+            use_rerank=use_rerank,
+        )
+    st.session_state.result = result
 
-    st.session_state.evidence = [
-        ("E101", "ADA guideline excerpt...", "download (TBD)"),
-        ("E233", "Peer-reviewed evidence snippet...", "download (TBD)"),
-        ("E331", "Hospital protocol reference...", "download (TBD)"),
-    ]
-
-    st.session_state.response = {
-        "short": "Ibuprofen may cause dizziness in some patients.",
-        "confidence": "89%",
-        "reasoning": "Retrieved clinical sources list dizziness as a known side effect.",
-        "next_steps": "Review dosage, check interactions, monitor symptoms."
-    }
-
-    st.session_state.latency = round((time.time() - t0) * 1000, 2)
-    st.session_state.logs.append(
-        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Run completed in {st.session_state.latency} ms"
-    )
-
-    # For your comparison page
+    # Store for stress-test comparison page
     st.session_state.primary_last_run = {
         "query": query_text,
-        "confidence": st.session_state.response["confidence"],
-        "evidence_count": len(st.session_state.evidence)
+        "confidence": f"{result['confidence']:.0%}",
+        "evidence_count": len(result["evidence"]),
     }
 
-# -------------------------------
-# Main Panel Header
-# -------------------------------
+    st.session_state.logs.append(
+        f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}]  "
+        f"Query completed in {result['latency_ms']} ms  ·  "
+        f"Evidence: {len(result['evidence'])}  ·  "
+        f"Confidence: {result['confidence']:.0%}"
+    )
+
+elif run and not query_text:
+    st.sidebar.warning("Please enter a query first.")
+
+
+# ══════════════════════════════════════════════════════════════
+#  MAIN HEADER
+# ══════════════════════════════════════════════════════════════
 st.markdown("## TruPharma GenAI Assistant")
-
-project_name = "TruPharma GenAI Assistant"
-status = "Primary Demo"
-timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
 st.markdown(
-    f"<div class='main-header-bar'>Prototype Primary Demo</div>",
-    unsafe_allow_html=True
+    "<div class='main-header-bar'>Prototype Primary Demo — Drug Label Evidence RAG</div>",
+    unsafe_allow_html=True,
 )
 
-# -------------------------------
-# ONE pill row (selectable)
-# -------------------------------
-# --- state init (put once, near your other session_state init) ---
-if "active_panel" not in st.session_state:
-    st.session_state.active_panel = "ALL"
-
-def set_panel(name: str):
-    # click same pill again => back to ALL
-    st.session_state.active_panel = "ALL" if st.session_state.active_panel == name else name
-
-
-# --- ONE pill row (put under your header) ---
+# ── Pill row ──
 c1, c2, c3, c4 = st.columns(4, gap="small")
+c1.button("Response", use_container_width=True,
+           type="primary" if st.session_state.active_panel == "Response" else "secondary",
+           key="pill_response", on_click=set_panel, args=("Response",))
+c2.button("Evidence / Artifacts", use_container_width=True,
+           type="primary" if st.session_state.active_panel == "Evidence" else "secondary",
+           key="pill_evidence", on_click=set_panel, args=("Evidence",))
+c3.button("Metrics & Monitoring", use_container_width=True,
+           type="primary" if st.session_state.active_panel == "Metrics" else "secondary",
+           key="pill_metrics", on_click=set_panel, args=("Metrics",))
+c4.button("Logs", use_container_width=True,
+           type="primary" if st.session_state.active_panel == "Logs" else "secondary",
+           key="pill_logs", on_click=set_panel, args=("Logs",))
 
-c1.button(
-    "Response",
-    use_container_width=True,
-    type="primary" if st.session_state.active_panel == "Response" else "secondary",
-    key="pill_response",
-    on_click=set_panel,
-    args=("Response",),
-)
-
-c2.button(
-    "Evidence / Artifacts",
-    use_container_width=True,
-    type="primary" if st.session_state.active_panel == "Evidence" else "secondary",
-    key="pill_evidence",
-    on_click=set_panel,
-    args=("Evidence",),
-)
-
-c3.button(
-    "Metrics & Monitoring",
-    use_container_width=True,
-    type="primary" if st.session_state.active_panel == "Metrics" else "secondary",
-    key="pill_metrics",
-    on_click=set_panel,
-    args=("Metrics",),
-)
-
-c4.button(
-    "Logs",
-    use_container_width=True,
-    type="primary" if st.session_state.active_panel == "Logs" else "secondary",
-    key="pill_logs",
-    on_click=set_panel,
-    args=("Logs",),
-)
-
-st.caption("Tip: Click the same pill again to return to the full dashboard view.")
+st.caption("Click a pill to focus; click again to return to the full dashboard view.")
 
 
+# ══════════════════════════════════════════════════════════════
+#  RENDER HELPERS
+# ══════════════════════════════════════════════════════════════
 
-# -------------------------------
-# Render helpers
-# -------------------------------
-def render_response_only():
-    st.markdown("<div class='card'><div class='card-title response'>Response Panel</div>", unsafe_allow_html=True)
-
-    if not st.session_state.response:
-        st.markdown("""
-        <ul class="bullets">
-          <li>Short Answer + Confidence</li>
-          <li>Reasoning Summary</li>
-          <li>Actionable Next Steps</li>
-        </ul>
-        """, unsafe_allow_html=True)
+def render_response():
+    st.markdown(
+        "<div class='card'><div class='card-title response'>Response Panel</div>",
+        unsafe_allow_html=True,
+    )
+    r = st.session_state.result
+    if not r:
+        st.info("Enter a drug-label question in the sidebar and click **Run RAG Query**.")
     else:
-        r = st.session_state.response
-        st.markdown(f"**Short Answer:** {r['short']}")
-        st.markdown(f"**Confidence:** {r['confidence']}")
-        st.markdown("**Reasoning Summary:**")
-        st.write(r["reasoning"])
-        st.markdown("**Actionable Next Steps:**")
-        st.write(r["next_steps"])
-
+        st.markdown(f"**Confidence:** {r['confidence']:.0%}")
+        llm_label = "Gemini 2.0 Flash" if r["llm_used"] else "Extractive fallback"
+        st.markdown(f"**Generator:** {llm_label}")
+        st.markdown("---")
+        st.markdown(r["answer"])
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_evidence_only():
-    st.markdown("<div class='card'><div class='card-title evidence'>Evidence / Artifacts</div>", unsafe_allow_html=True)
-
-    if not st.session_state.evidence:
-        st.markdown("""
-        <ul class="bullets">
-          <li>Evidence ID</li>
-          <li>Source Text</li>
-          <li>Download Link</li>
-        </ul>
-        """, unsafe_allow_html=True)
+def render_evidence():
+    st.markdown(
+        "<div class='card'><div class='card-title evidence'>Evidence / Artifacts</div>",
+        unsafe_allow_html=True,
+    )
+    r = st.session_state.result
+    if not r or not r["evidence"]:
+        st.info("Evidence will appear here after running a query.")
     else:
-        for evid, text, dl in st.session_state.evidence:
-            st.markdown(f"**{evid}** — {text}")
-            st.caption(f"Download: {dl}")
-
+        for i, ev in enumerate(r["evidence"], 1):
+            with st.expander(f"Evidence {i}  ·  {ev['cite']}  ·  field: {ev['field']}"):
+                st.markdown(f"**Document:** `{ev['doc_id']}`")
+                st.markdown(f"**Field:** `{ev['field']}`")
+                st.markdown("**Content:**")
+                st.text(ev["content"][:600])
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_metrics_only():
-    st.markdown("<div class='card'><div class='card-title metrics'>Metrics & Monitoring</div>", unsafe_allow_html=True)
+def render_metrics():
+    st.markdown(
+        "<div class='card'><div class='card-title metrics'>Metrics & Monitoring</div>",
+        unsafe_allow_html=True,
+    )
+    r = st.session_state.result
+    if r:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Latency", f"{r['latency_ms']:.0f} ms")
+        m2.metric("Evidence Ct.", len(r["evidence"]))
+        m3.metric("Confidence", f"{r['confidence']:.0%}")
+        m4.metric("Records Fetched", r["num_records"])
 
-    st.markdown(f"- **Latency (ms):** {st.session_state.latency}")
-    st.markdown(f"- **Evidence Count:** {len(st.session_state.evidence)}")
-    st.markdown("- **Errors / Fallbacks:** None")
-
+        st.markdown(f"- **Retrieval method:** {r['method']}")
+        st.markdown(f"- **LLM used:** {'Gemini 2.0 Flash' if r['llm_used'] else 'Extractive fallback'}")
+        st.markdown(f"- **openFDA search:** `{r['search_query'][:120]}`")
+        st.markdown(f"- **Errors / Fallbacks:** None")
+    else:
+        st.info("Run a query to see metrics.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-def render_logs_only():
-    st.markdown("<div class='card'><div class='card-title logs'>Logs</div>", unsafe_allow_html=True)
+def render_logs():
+    st.markdown(
+        "<div class='card'><div class='card-title logs'>Logs</div>",
+        unsafe_allow_html=True,
+    )
 
+    # Session logs (in-memory)
+    st.markdown("**Session Log**")
     if not st.session_state.logs:
-        st.write("No logs yet.")
+        st.write("No queries run yet this session.")
     else:
-        for line in st.session_state.logs[-10:][::-1]:
+        for line in reversed(st.session_state.logs[-10:]):
             st.write(line)
 
+    # CSV log (persistent)
+    st.markdown("---")
+    st.markdown("**Product Metrics CSV** (`logs/product_metrics.csv`)")
+    csv_rows = read_logs(last_n=10)
+    if csv_rows:
+        import pandas as pd
+        df = pd.DataFrame(csv_rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    else:
+        st.write("No CSV log entries yet.")
+
     st.markdown("</div>", unsafe_allow_html=True)
 
-def render_overall_panel():
+
+def render_overall():
     left, right = st.columns([2.2, 1.2], gap="large")
-
     with left:
-        render_response_only()
-
+        render_response()
     with right:
-        render_evidence_only()
-        render_metrics_only()
+        render_evidence()
+        render_metrics()
+    render_logs()
 
-    render_logs_only()
 
-# -------------------------------
-# Conditional views
-# -------------------------------
+# ══════════════════════════════════════════════════════════════
+#  CONDITIONAL VIEWS
+# ══════════════════════════════════════════════════════════════
 active = st.session_state.active_panel
 
 if active == "ALL":
-    render_overall_panel()
+    render_overall()
 elif active == "Response":
-    render_response_only()
+    render_response()
 elif active == "Evidence":
-    render_evidence_only()
+    render_evidence()
 elif active == "Metrics":
-    render_metrics_only()
+    render_metrics()
 elif active == "Logs":
-    render_logs_only()
+    render_logs()
