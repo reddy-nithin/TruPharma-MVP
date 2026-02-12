@@ -27,6 +27,16 @@ try:
 except Exception:
     SentenceTransformer = None
 
+# Cache SentenceTransformer models so they are loaded only once
+_ST_MODEL_CACHE: Dict = {}
+
+
+def _get_st_model(model_name: str):
+    """Return a cached SentenceTransformer (avoids 30s+ reload per query)."""
+    if model_name not in _ST_MODEL_CACHE:
+        _ST_MODEL_CACHE[model_name] = SentenceTransformer(model_name)
+    return _ST_MODEL_CACHE[model_name]
+
 OPENFDA_BASE_URL = "https://api.fda.gov/drug/label.json"
 OPENFDA_MAX_LIMIT = 1000
 
@@ -325,7 +335,7 @@ def build_artifacts(
     vecs_B = None
 
     if use_st and SentenceTransformer is not None and texts_A:
-        embedder = SentenceTransformer(st_model)
+        embedder = _get_st_model(st_model)
         embedder_type = "sentence_transformers"
         vecs_A = embedder.encode(
             texts_A, show_progress_bar=False, convert_to_numpy=True, normalize_embeddings=True
