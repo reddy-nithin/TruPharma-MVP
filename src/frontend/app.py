@@ -209,17 +209,20 @@ st.markdown(
 )
 
 # ── Pill row ──
-c1, c2, c3, c4 = st.columns(4, gap="small")
+c1, c2, c3, c4, c5 = st.columns(5, gap="small")
 c1.button("Response", width="stretch",
            type="primary" if st.session_state.active_panel == "Response" else "secondary",
            key="pill_response", on_click=set_panel, args=("Response",))
-c2.button("Evidence / Artifacts", width="stretch",
+c2.button("Knowledge Graph", width="stretch",
+           type="primary" if st.session_state.active_panel == "KG" else "secondary",
+           key="pill_kg", on_click=set_panel, args=("KG",))
+c3.button("Evidence / Artifacts", width="stretch",
            type="primary" if st.session_state.active_panel == "Evidence" else "secondary",
            key="pill_evidence", on_click=set_panel, args=("Evidence",))
-c3.button("Metrics & Monitoring", width="stretch",
+c4.button("Metrics & Monitoring", width="stretch",
            type="primary" if st.session_state.active_panel == "Metrics" else "secondary",
            key="pill_metrics", on_click=set_panel, args=("Metrics",))
-c4.button("Logs", width="stretch",
+c5.button("Logs", width="stretch",
            type="primary" if st.session_state.active_panel == "Logs" else "secondary",
            key="pill_logs", on_click=set_panel, args=("Logs",))
 
@@ -262,6 +265,61 @@ def render_evidence():
                 st.markdown(f"**Field:** `{ev['field']}`")
                 st.markdown("**Content:**")
                 st.text(ev["content"][:600])
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def render_kg():
+    st.markdown(
+        "<div class='card'><div class='card-title' style='color:#7c3aed;'>Knowledge Graph</div>",
+        unsafe_allow_html=True,
+    )
+    r = st.session_state.result
+    if not r:
+        st.info("Run a query to see Knowledge Graph data.")
+    elif not r.get("kg_available", False):
+        st.warning("Knowledge Graph not available. "
+                   "Build it with: `python3 scripts/build_kg.py`")
+    else:
+        interactions = r.get("kg_interactions", [])
+        co_reported = r.get("kg_co_reported", [])
+        reactions = r.get("kg_reactions", [])
+        ingredients = r.get("kg_ingredients", [])
+
+        any_data = interactions or co_reported or reactions or ingredients
+        if not any_data:
+            st.info("This drug is not in the Knowledge Graph seed list. "
+                    "Try a more common drug, or rebuild with a larger seed.")
+        else:
+            if ingredients:
+                st.markdown("**🧪 Active Ingredients**")
+                for ing in ingredients:
+                    strength = f" — {ing['strength']}" if ing.get('strength') else ""
+                    st.markdown(f"- {ing['ingredient']}{strength}")
+
+            if interactions:
+                st.markdown("**⚡ Drug Interactions** (from FDA labels)")
+                for ix in interactions[:10]:
+                    desc = f": {ix['description']}" if ix.get('description') else ""
+                    st.markdown(f"- **{ix['drug_name']}**{desc}")
+
+            if co_reported:
+                st.markdown("**🔗 Co-Reported Drugs** (from FAERS)")
+                import pandas as pd
+                df = pd.DataFrame([
+                    {"Drug": cr["drug_name"], "Reports": cr.get("report_count", 0)}
+                    for cr in co_reported[:10]
+                ])
+                st.dataframe(df, hide_index=True, width='stretch')
+
+            if reactions:
+                st.markdown("**⚠️ Adverse Reactions** (from FAERS)")
+                import pandas as pd
+                df = pd.DataFrame([
+                    {"Reaction": rx["reaction"], "Reports": rx.get("report_count", 0)}
+                    for rx in reactions[:10]
+                ])
+                st.dataframe(df, hide_index=True, width='stretch')
+
     st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -319,6 +377,7 @@ def render_overall():
     left, right = st.columns([2.2, 1.2], gap="large")
     with left:
         render_response()
+        render_kg()
     with right:
         render_evidence()
         render_metrics()
@@ -334,6 +393,8 @@ if active == "ALL":
     render_overall()
 elif active == "Response":
     render_response()
+elif active == "KG":
+    render_kg()
 elif active == "Evidence":
     render_evidence()
 elif active == "Metrics":

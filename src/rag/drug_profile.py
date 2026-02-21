@@ -29,6 +29,7 @@ from src.ingestion.openfda_client import (
 from src.ingestion.rxnorm import resolve_drug_name
 from src.ingestion.faers import fetch_faers_summary, format_faers_as_text
 from src.ingestion.ndc import fetch_ndc_metadata, format_ndc_as_text
+from src.kg.loader import load_kg
 
 _FIELD_BLOCKLIST = {
     "spl_product_data_elements",
@@ -315,6 +316,24 @@ def build_unified_profile(user_query: str) -> dict:
             "text": disparity_text,
         })
 
+    # ── Knowledge Graph enrichment (additive, graceful degradation) ──
+    kg_data = {
+        "kg_interactions": [],
+        "kg_co_reported": [],
+        "kg_reactions": [],
+        "kg_ingredients": [],
+    }
+    kg = load_kg()
+    if kg:
+        lookup = rxcui or generic
+        kg_data["kg_interactions"] = kg.get_interactions(lookup)
+        kg_data["kg_co_reported"] = kg.get_co_reported(lookup)
+        kg_data["kg_reactions"] = kg.get_drug_reactions(lookup)
+        kg_data["kg_ingredients"] = kg.get_ingredients(lookup)
+
+        # Add KG-sourced text sections for RAG retrieval
+        _add_kg_text_sections(text_sections, generic, kg_data)
+
     return {
         "drug_identity": {
             "input": user_query,
@@ -328,7 +347,53 @@ def build_unified_profile(user_query: str) -> dict:
         "ndc_metadata": ndc_metadata,
         "disparity_analysis": disparity,
         "text_sections": text_sections,
+        **kg_data,
     }
+
+
+def _add_kg_text_sections(
+    sections: list, drug_name: str, kg_data: dict
+) -> None:
+    """Add KG-sourced structured text sections for RAG retrieval."""
+    drug_upper = drug_name.upper()
+
+    interactions = kg_data.get("kg_interactions", [])
+    if interactions:
+        lines = [f"KNOWLEDGE GRAPH: DRUG INTERACTIONS FOR {drug_upper}"]
+        for ix in interactions[:15]:
+            desc = f" — {ix['description']}" if ix.get("description") else ""
+            lines.append(f"  • {ix['drug_name']} (source: {ix.get('source', '?')}){desc}")
+        sections.append({
+            "source": "kg", "field": "interactions", "text": "\n".join(lines),
+        })
+
+    co_reported = kg_data.get("kg_co_reported", [])
+    if co_reported:
+        lines = [f"KNOWLEDGE GRAPH: CO-REPORTED DRUGS FOR {drug_upper} (from FAERS)"]
+        for cr in co_reported[:15]:
+            lines.append(f"  • {cr['drug_name']} — {cr.get('report_count', 0):,} reports")
+        sections.append({
+            "source": "kg", "field": "co_reported", "text": "\n".join(lines),
+        })
+
+    reactions = kg_data.get("kg_reactions", [])
+    if reactions:
+        lines = [f"KNOWLEDGE GRAPH: ADVERSE REACTIONS FOR {drug_upper} (from FAERS)"]
+        for rx in reactions[:15]:
+            lines.append(f"  • {rx['reaction']} — {rx.get('report_count', 0):,} reports")
+        sections.append({
+            "source": "kg", "field": "reactions", "text": "\n".join(lines),
+        })
+
+    ingredients = kg_data.get("kg_ingredients", [])
+    if ingredients:
+        lines = [f"KNOWLEDGE GRAPH: ACTIVE INGREDIENTS FOR {drug_upper}"]
+        for ing in ingredients:
+            strength = f" ({ing['strength']})" if ing.get("strength") else ""
+            lines.append(f"  • {ing['ingredient']}{strength}")
+        sections.append({
+            "source": "kg", "field": "ingredients", "text": "\n".join(lines),
+        })
 
 
 def _add_faers_sections(

@@ -32,6 +32,8 @@ from src.ingestion.openfda_client import (
     build_openfda_query,
     tokenize,
 )
+from src.kg.loader import load_kg
+from src.rag.drug_profile import _extract_drug_name
 
 # ── Silence noisy libraries ──────────────────────────────────
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -179,6 +181,7 @@ def _build_prompt(question: str, evidence: list) -> str:
         f"Question: {question}\n\n"
         f"Answer (with citations):"
     )
+
 
 
 def _call_gemini(prompt: str, api_key: str) -> Optional[str]:
@@ -402,7 +405,42 @@ def run_rag_query(
     conf = _confidence(evidence, answer)
     lat = round((time.time() - t0) * 1000, 1)
 
-    # 8 ── Log interaction to CSV
+    # 8 ── Knowledge Graph enrichment (additive, graceful degradation)
+    kg_data = {
+        "kg_interactions": [],
+        "kg_co_reported": [],
+        "kg_reactions": [],
+        "kg_ingredients": [],
+        "kg_available": False,
+    }
+    try:
+        kg = load_kg()
+        if kg:
+            drug_name = _extract_drug_name(query)
+
+            # Strategy 1: try the raw extracted name directly (uses alias table — fast, reliable)
+            if any([
+                kg.get_drug_identity(drug_name),
+            ]):
+                lookup = drug_name
+            else:
+                # Strategy 2: RxNorm resolution as fallback (slower, network call)
+                try:
+                    from src.ingestion.rxnorm import resolve_drug_name
+                    rxnorm = resolve_drug_name(drug_name)
+                    lookup = rxnorm.get("rxcui") or rxnorm.get("generic_name") or drug_name
+                except Exception:
+                    lookup = drug_name
+
+            kg_data["kg_interactions"] = kg.get_interactions(lookup)
+            kg_data["kg_co_reported"] = kg.get_co_reported(lookup)
+            kg_data["kg_reactions"] = kg.get_drug_reactions(lookup)
+            kg_data["kg_ingredients"] = kg.get_ingredients(lookup)
+            kg_data["kg_available"] = True
+    except Exception:
+        pass  # Graceful degradation
+
+    # 9 ── Log interaction to CSV
     ev_ids = [e["cite"] for e in evidence]
     log_row({
         "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -427,4 +465,5 @@ def run_rag_query(
         "prompt": prompt,
         "llm_used": llm_used,
         "method": method,
+        **kg_data,
     }
