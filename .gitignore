@@ -32,4 +32,3 @@ desktop.ini
 # Environment variables / secrets
 .env
 *.key
-data/kg/*.db
